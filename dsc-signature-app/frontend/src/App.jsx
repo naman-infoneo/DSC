@@ -14,9 +14,9 @@ function App() {
       method: 'POST',
       body: formData,
     });
-    console.log(res);
     // Download signed file
     const blob = await res.blob();
+    console.log('Signed PDF received:', blob);
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
