@@ -2,175 +2,108 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const signer = require('node-signpdf').default;
-const plainAddPlaceholder = require('node-signpdf/dist/helpers/plainAddPlaceholder').default;
+const { signPdf } = require('@signpdf/signpdf');
+const { plainAddPlaceholder } = require('@signpdf/placeholder-plain');
 const cors = require('cors');
-const { exec } = require('child_process');
+const WindowsCertificateManager = require('./windows-certificate-manager');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 app.use(cors());
 app.use(express.json());
 
-// Store for uploaded certificates
-const certStorage = new Map();
+const certManager = new WindowsCertificateManager();
 
-// Helper function to detect USB tokens (Windows example)
-const detectUSBTokens = () => {
-  return new Promise((resolve, reject) => {
-    // This is a simplified example - actual implementation depends on your USB token type
-    exec('wmic logicaldisk get size,volumename,caption', (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      
-      const tokens = [];
-      const lines = stdout.split('\n');
-      
-      lines.forEach(line => {
-        if (line.includes('TOKEN') || line.includes('CERT')) {
-          // Parse and identify potential certificate storage devices
-          tokens.push({
-            id: Math.random().toString(36),
-            name: line.trim(),
-            type: 'usb_token'
-          });
-        }
-      });
-      
-      resolve(tokens);
-    });
-  });
-};
-
-// API to get available signing options
-app.get('/signing-options', async (req, res) => {
+// API to get certificates from Windows Certificate Store
+app.get('/windows-certificates', async (req, res) => {
   try {
-    const options = {
-      static: {
-        available: fs.existsSync('./certificate.pfx'),
-        name: 'Static Certificate (certificate.pfx)'
-      },
-      usb_tokens: []
-    };
+    const certificates = await certManager.getCertificatesFromStore();
+    const usbCertificates = await certManager.getUSBTokenCertificates();
 
-    // Try to detect USB tokens
-    try {
-      const tokens = await detectUSBTokens();
-      options.usb_tokens = tokens;
-    } catch (err) {
-      console.log('USB token detection failed:', err.message);
-    }
-
-    res.json(options);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// API to upload certificate from USB token
-app.post('/upload-certificate', upload.single('certificate'), (req, res) => {
-  try {
-    const certId = Math.random().toString(36);
-    const certPath = req.file.path;
+    console.log('sdfs' ,certificates )
     
-    certStorage.set(certId, {
-      path: certPath,
-      originalName: req.file.originalname,
-      type: 'uploaded'
+    res.json({
+      success: true,
+      certificates: {
+        all: certificates,
+        usbToken: usbCertificates
+      }
     });
-
-    res.json({ 
-      certId,
-      message: 'Certificate uploaded successfully',
-      name: req.file.originalname
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
 });
 
-// Enhanced signing endpoint
-app.post('/sign', upload.single('pdf'), async (req, res) => {
+// Sign PDF using Windows Certificate Store
+app.post('/sign-windows-cert', upload.single('pdf'), async (req, res) => {
+  let tempCertPath = null;
+  
   try {
-    const { signingMethod, certId, password } = req.body;
+    const { thumbprint, password = '' } = req.body;
     
     if (!req.file) {
       return res.status(400).json({ error: 'No PDF file provided' });
     }
 
-    const pdfBuffer = fs.readFileSync(req.file.path);
-    const placeholderPdf = plainAddPlaceholder({ pdfBuffer });
-    
-    let p12Buffer;
-    let certPassword = password || '123456'; // Default password
-
-    // Handle different signing methods
-    switch (signingMethod) {
-      case 'static':
-        if (!fs.existsSync('./certificate.pfx')) {
-          throw new Error('Static certificate not found');
-        }
-        p12Buffer = fs.readFileSync('./certificate.pfx');
-        break;
-        
-      case 'usb_token':
-        if (!certId || !certStorage.has(certId)) {
-          throw new Error('Certificate not found. Please upload certificate first.');
-        }
-        const certInfo = certStorage.get(certId);
-        p12Buffer = fs.readFileSync(certInfo.path);
-        break;
-        
-      default:
-        throw new Error('Invalid signing method');
+    if (!thumbprint) {
+      return res.status(400).json({ error: 'Certificate thumbprint required' });
     }
 
-    // Sign the PDF
-    const signedPdf = signer.sign(placeholderPdf, p12Buffer, { 
-      passphrase: certPassword 
+    // Read PDF
+    const pdfBuffer = fs.readFileSync(req.file.path);
+    
+    // Export certificate from Windows store
+    tempCertPath = await certManager.exportCertificate(thumbprint, password);
+    const p12Buffer = fs.readFileSync(tempCertPath);
+    
+    // Add placeholder and sign
+    const pdfWithPlaceholder = plainAddPlaceholder({
+      pdfBuffer,
+      reason: 'Signed with Windows Certificate Store',
+      location: 'Windows Certificate Store',
+    });
+    
+    const signedPdf = signPdf(pdfWithPlaceholder, p12Buffer, {
+      passphrase: password
     });
 
     // Cleanup
     fs.unlinkSync(req.file.path);
-    if (signingMethod === 'usb_token' && certId) {
-      const certInfo = certStorage.get(certId);
-      if (certInfo && fs.existsSync(certInfo.path)) {
-        fs.unlinkSync(certInfo.path);
-      }
-      certStorage.delete(certId);
+    if (tempCertPath && fs.existsSync(tempCertPath)) {
+      fs.unlinkSync(tempCertPath);
     }
 
     res.type('application/pdf');
     res.send(signedPdf);
-  } catch (err) {
-    console.error('Signing error:', err);
+  } catch (error) {
+    console.error('Signing error:', error);
     
     // Cleanup on error
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
+    if (tempCertPath && fs.existsSync(tempCertPath)) {
+      fs.unlinkSync(tempCertPath);
+    }
     
-    res.status(500).json({ error: 'Signing error: ' + err.message });
+    res.status(500).json({ error: 'Signing error: ' + error.message });
   }
 });
 
-// Cleanup endpoint for uploaded certificates
-app.delete('/cleanup-certificate/:certId', (req, res) => {
-  const { certId } = req.params;
-  
-  if (certStorage.has(certId)) {
-    const certInfo = certStorage.get(certId);
-    if (fs.existsSync(certInfo.path)) {
-      fs.unlinkSync(certInfo.path);
-    }
-    certStorage.delete(certId);
-    res.json({ message: 'Certificate cleaned up' });
-  } else {
-    res.status(404).json({ error: 'Certificate not found' });
-  }
+// Cleanup on exit
+process.on('exit', () => {
+  certManager.cleanup();
+});
+
+process.on('SIGINT', () => {
+  certManager.cleanup();
+  process.exit(0);
 });
 
 const PORT = 3001;
-app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Windows Certificate Store server running on port ${PORT}`);
+});

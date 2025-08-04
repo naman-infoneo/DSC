@@ -2,112 +2,60 @@ import React, { useState, useEffect } from 'react';
 
 function App() {
   const [pdf, setPdf] = useState(null);
-  const [signingOptions, setSigningOptions] = useState(null);
-  const [selectedMethod, setSelectedMethod] = useState('static');
+  const [certificates, setCertificates] = useState({ all: [], usbToken: [] });
+  const [selectedCert, setSelectedCert] = useState('');
   const [password, setPassword] = useState('');
-  const [certificate, setCertificate] = useState(null);
-  const [uploadedCertId, setUploadedCertId] = useState(null);
+  const [useUSBToken, setUseUSBToken] = useState(false);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
 
-  // Fetch available signing options on component mount
   useEffect(() => {
-    fetchSigningOptions();
+    loadCertificates();
   }, []);
 
-  const fetchSigningOptions = async () => {
-    try {
-      const res = await fetch('http://localhost:3001/signing-options');
-      const options = await res.json();
-      setSigningOptions(options);
-      
-      // Auto-select method based on availability
-      if (!options.static.available && options.usb_tokens.length === 0) {
-        setSelectedMethod('usb_token');
-      }
-    } catch (err) {
-      console.error('Failed to fetch signing options:', err);
-      setStatus('Failed to load signing options');
-    }
-  };
-
-  const handlePdfChange = (e) => {
-    setPdf(e.target.files[0]);
-    setStatus('');
-  };
-
-  const handleCertificateChange = (e) => {
-    setCertificate(e.target.files[0]);
-    setStatus('');
-  };
-
-  const uploadCertificate = async () => {
-    if (!certificate) {
-      setStatus('Please select a certificate file');
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('certificate', certificate);
-
+  const loadCertificates = async () => {
     try {
       setLoading(true);
-      const res = await fetch('http://localhost:3001/upload-certificate', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const result = await res.json();
+      setStatus('Loading certificates from Windows Certificate Store...');
       
-      if (res.ok) {
-        setUploadedCertId(result.certId);
-        setStatus(`Certificate uploaded: ${result.name}`);
+      const response = await fetch('http://localhost:3001/windows-certificates');
+      const result = await response.json();
+      
+      if (result.success) {
+        setCertificates(result.certificates);
+        setStatus(`Found ${result.certificates.all.length} certificates (${result.certificates.usbToken.length} on USB tokens)`);
       } else {
-        setStatus(`Upload failed: ${result.error}`);
+        setStatus(`Failed to load certificates: ${result.error}`);
       }
-    } catch (err) {
-      setStatus(`Upload failed: ${err.message}`);
+    } catch (error) {
+      setStatus(`Error loading certificates: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const handleSign = async () => {
-    if (!pdf) {
-      setStatus('Please select a PDF file');
-      return;
-    }
-
-    if (selectedMethod === 'usb_token' && !uploadedCertId) {
-      setStatus('Please upload a certificate first');
-      return;
-    }
-
-    if (!password) {
-      setStatus('Please enter certificate password');
+    if (!pdf || !selectedCert) {
+      setStatus('Please select a PDF file and certificate');
       return;
     }
 
     const formData = new FormData();
     formData.append('pdf', pdf);
-    formData.append('signingMethod', selectedMethod);
+    formData.append('thumbprint', selectedCert);
     formData.append('password', password);
-    
-    if (uploadedCertId) {
-      formData.append('certId', uploadedCertId);
-    }
 
     try {
       setLoading(true);
-      setStatus('Signing PDF...');
+      setStatus('Signing PDF with Windows Certificate Store...');
       
-      const res = await fetch('http://localhost:3001/sign', {
+      const response = await fetch('http://localhost:3001/sign-windows-cert', {
         method: 'POST',
         body: formData,
       });
 
-      if (res.ok) {
-        const blob = await res.blob();
+      if (response.ok) {
+        const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -116,101 +64,92 @@ function App() {
         window.URL.revokeObjectURL(url);
         
         setStatus('PDF signed successfully!');
-        
-        // Reset form
-        setPdf(null);
-        setCertificate(null);
-        setUploadedCertId(null);
-        setPassword('');
       } else {
-        const error = await res.json();
+        const error = await response.json();
         setStatus(`Signing failed: ${error.error}`);
       }
-    } catch (err) {
-      setStatus(`Signing failed: ${err.message}`);
+    } catch (error) {
+      setStatus(`Signing failed: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  if (!signingOptions) {
-    return <div className="container">Loading signing options...</div>;
-  }
+  const displayCerts = useUSBToken ? certificates.usbToken : certificates.all;
 
   return (
     <div className="container">
-      <h1>DSC PDF Signer</h1>
+      <h1>Windows Certificate Store PDF Signer</h1>
       
-      {/* PDF File Selection */}
+      {/* PDF Selection */}
       <div className="form-group">
         <label>Select PDF to Sign:</label>
         <input 
           type="file" 
           accept="application/pdf" 
-          onChange={handlePdfChange}
+          onChange={(e) => setPdf(e.target.files[0])}
           disabled={loading}
         />
       </div>
 
-      {/* Signing Method Selection */}
+      {/* Certificate Type Selection */}
       <div className="form-group">
-        <label>Signing Method:</label>
+        <label>Certificate Source:</label>
         <div className="radio-group">
           <label>
             <input
               type="radio"
-              value="static"
-              checked={selectedMethod === 'static'}
-              onChange={(e) => setSelectedMethod(e.target.value)}
-              disabled={!signingOptions.static.available || loading}
+              checked={!useUSBToken}
+              onChange={() => setUseUSBToken(false)}
+              disabled={loading}
             />
-            Static Certificate {!signingOptions.static.available && '(Not Available)'}
+            All Certificates
           </label>
-          
           <label>
             <input
               type="radio"
-              value="usb_token"
-              checked={selectedMethod === 'usb_token'}
-              onChange={(e) => setSelectedMethod(e.target.value)}
+              checked={useUSBToken}
+              onChange={() => setUseUSBToken(true)}
               disabled={loading}
             />
-            USB Token / Upload Certificate
+            USB Token Only ({certificates.usbToken.length} found)
           </label>
         </div>
       </div>
 
-      {/* USB Token Certificate Upload */}
-      {selectedMethod === 'usb_token' && (
-        <div className="form-group">
-          <label>Upload Certificate from USB Token:</label>
-          <input 
-            type="file" 
-            accept=".pfx,.p12,.cer,.crt"
-            onChange={handleCertificateChange}
+      {/* Certificate Selection */}
+      <div className="form-group">
+        <label>Select Certificate:</label>
+        <button onClick={loadCertificates} disabled={loading} className="btn-secondary">
+          Refresh Certificates
+        </button>
+        
+        {displayCerts.length > 0 ? (
+          <select 
+            value={selectedCert} 
+            onChange={(e) => setSelectedCert(e.target.value)}
             disabled={loading}
-          />
-          <button 
-            onClick={uploadCertificate}
-            disabled={!certificate || loading}
-            className="btn-secondary"
           >
-            Upload Certificate
-          </button>
-          {uploadedCertId && (
-            <span className="success">✓ Certificate uploaded</span>
-          )}
-        </div>
-      )}
+            <option value="">Select a certificate...</option>
+            {displayCerts.map(cert => (
+              <option key={cert.Thumbprint} value={cert.Thumbprint}>
+                {cert.FriendlyName || cert.Subject} - Valid until: {new Date(cert.NotAfter).toLocaleDateString()}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <p>No certificates found. Make sure certificates are installed in Windows Certificate Store.</p>
+        )}
+      </div>
 
       {/* Password Input */}
       <div className="form-group">
-        <label>Certificate Password:</label>
+        <label>Certificate Password (if required):</label>
         <input
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="Enter certificate password"
+          placeholder="Enter certificate password (leave blank if none)"
           disabled={loading}
         />
       </div>
@@ -218,13 +157,13 @@ function App() {
       {/* Sign Button */}
       <button 
         onClick={handleSign} 
-        disabled={!pdf || loading || (selectedMethod === 'usb_token' && !uploadedCertId)}
+        disabled={!pdf || !selectedCert || loading}
         className="btn-primary"
       >
         {loading ? 'Processing...' : 'Sign PDF'}
       </button>
 
-      {/* Status Display */}
+      {/* Status */}
       {status && (
         <div className={`status ${status.includes('successfully') ? 'success' : status.includes('failed') ? 'error' : ''}`}>
           {status}
