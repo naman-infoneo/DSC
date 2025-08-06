@@ -6,6 +6,8 @@ const signer = require('node-signpdf').default;
 const plainAddPlaceholder = require('node-signpdf/dist/helpers/plainAddPlaceholder').default;
 const cors = require('cors');
 const { exec } = require('child_process');
+const pkcs11js = require('pkcs11js');
+const fs = require('fs');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
@@ -15,93 +17,164 @@ app.use(express.json());
 
 class USBTokenManager {
     constructor() {
+        // Common PKCS#11 library paths for different platforms
+        this.pkcs11Libraries = [
+            // Windows paths
+            'C:\\Windows\\System32\\eTPKCS11.dll',       // SafeNet eToken
+            'C:\\Windows\\System32\\w32pk2ig.dll',       // Gemalto
+            'C:\\Windows\\System32\\dkck232.dll',        // Datakey
+            'C:\\Windows\\System32\\acpkcs211.dll',      // Aladdin
+            'C:\\Windows\\System32\\eps2003csp11.dll',   // Rainbow
+            
+            // Linux paths
+            '/usr/lib/libeToken.so',
+            '/usr/lib/libpkcs11.so',
+            '/usr/local/lib/libpkcs11.so',
+            '/usr/lib/softhsm/libsofthsm2.so',           // SoftHSM for testing
+            
+            // macOS paths
+            '/usr/local/lib/libeToken.dylib',
+            '/usr/lib/libpkcs11.dylib'
+        ];
+        
         this.mockTokens = [
             {
                 type: 'mock_usb',
                 name: 'Simulated USB Token (eToken Pro)',
                 id: 'mock_token_1',
                 serial: 'SIM123456'
-            },
-            {
-                type: 'mock_smartcard',
-                name: 'Simulated Smart Card Reader',
-                id: 'mock_reader_1',
-                serial: 'SCR789012'
             }
         ];
-        console.log('🔧 USB Token Manager initialized (Simulation Mode)');
+        
+        console.log('🔧 USB Token Manager initialized with pkcs11js');
     }
 
-    // Simulate USB token detection
     async detectTokens() {
-        // Simulate detection delay
-        await new Promise(resolve => setTimeout(resolve, 500));
+        const tokens = [];
         
-        // On Windows, try to detect actual smart card readers
+        // Scan for real PKCS#11 tokens
+        for (const libPath of this.pkcs11Libraries) {
+            if (fs.existsSync(libPath)) {
+                try {
+                    const libraryTokens = await this.scanPKCS11Library(libPath);
+                    tokens.push(...libraryTokens);
+                    console.log(`✅ Found ${libraryTokens.length} tokens in ${libPath}`);
+                } catch (error) {
+                    console.log(`❌ Failed to scan ${libPath}: ${error.message}`);
+                }
+            }
+        }
+
+        // Windows smart card detection
         if (process.platform === 'win32') {
             try {
-                const realReaders = await this.detectWindowsReaders();
-                if (realReaders.length > 0) {
-                    return [...this.mockTokens, ...realReaders];
-                }
+                const smartCardTokens = await this.detectWindowsReaders();
+                tokens.push(...smartCardTokens);
             } catch (error) {
                 console.log('Windows reader detection failed:', error.message);
             }
         }
-        
-        return this.mockTokens;
+
+        // Return real tokens if found, otherwise return mock tokens
+        return tokens.length > 0 ? tokens : this.mockTokens;
     }
 
-    // Detect Windows smart card readers using system commands
-    async detectWindowsReaders() {
+    async scanPKCS11Library(libraryPath) {
         return new Promise((resolve) => {
-            exec('powershell "Get-PnpDevice -Class SmartCardReader"', (error, stdout) => {
-                const readers = [];
-                if (!error && stdout) {
-                    const lines = stdout.split('\n');
-                    lines.forEach((line, index) => {
-                        if (line.includes('OK') && line.includes('Smart')) {
-                            readers.push({
-                                type: 'windows_reader',
-                                name: `Windows Smart Card Reader ${index + 1}`,
-                                id: `win_reader_${index}`,
-                                detected: true
-                            });
-                        }
-                    });
+            try {
+                const pkcs11 = new pkcs11js.PKCS11();
+                pkcs11.load(libraryPath);
+                pkcs11.C_Initialize();
+
+                const slots = pkcs11.C_GetSlotList(true);
+                const tokens = [];
+
+                for (const slot of slots) {
+                    try {
+                        const slotInfo = pkcs11.C_GetSlotInfo(slot);
+                        const tokenInfo = pkcs11.C_GetTokenInfo(slot);
+                        
+                        tokens.push({
+                            type: 'pkcs11',
+                            name: `🔐 ${tokenInfo.label.trim()}`,
+                            id: `pkcs11_slot_${slot}`,
+                            slot: slot,
+                            library: libraryPath,
+                            serial: tokenInfo.serialNumber.trim(),
+                            manufacturer: tokenInfo.manufacturerID.trim(),
+                            model: tokenInfo.model.trim(),
+                            detected: true
+                        });
+                    } catch (slotError) {
+                        console.log(`Failed to get info for slot ${slot}:`, slotError.message);
+                    }
                 }
-                resolve(readers);
-            });
+
+                pkcs11.C_Finalize();
+                resolve(tokens);
+            } catch (error) {
+                console.log(`PKCS11 library error for ${libraryPath}:`, error.message);
+                resolve([]);
+            }
         });
     }
 
-    // Simulate certificate reading from USB token
     async readCertificateFromToken(tokenInfo, password) {
-        // Simulate hardware access delay
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        console.log(`📖 Reading certificate from: ${tokenInfo.name}`);
-        console.log(`🔐 Using password: ${'*'.repeat(password.length)}`);
-        
-        // Validate password (basic simulation)
-        if (password.length < 4) {
-            throw new Error('Password too short');
+        if (tokenInfo.type === 'pkcs11') {
+            return this.readFromPKCS11Token(tokenInfo, password);
+        } else {
+            // Fallback to static certificate or mock
+            return this.readStaticCertificate();
         }
-        
-        // Use static certificate as fallback for all token types
+    }
+
+    async readFromPKCS11Token(tokenInfo, password) {
+        try {
+            const pkcs11 = new pkcs11js.PKCS11();
+            pkcs11.load(tokenInfo.library);
+            pkcs11.C_Initialize();
+
+            const session = pkcs11.C_OpenSession(tokenInfo.slot, 
+                pkcs11js.CKF_SERIAL_SESSION | pkcs11js.CKF_RW_SESSION);
+            
+            // Login with PIN/password
+            pkcs11.C_Login(session, pkcs11js.CKU_USER, password);
+
+            // Find certificate objects
+            const template = [
+                { type: pkcs11js.CKA_CLASS, value: pkcs11js.CKO_CERTIFICATE }
+            ];
+            
+            pkcs11.C_FindObjectsInit(session, template);
+            const objects = pkcs11.C_FindObjects(session, 1);
+            
+            if (objects.length > 0) {
+                const certValue = pkcs11.C_GetAttributeValue(session, objects[0], [
+                    { type: pkcs11js.CKA_VALUE }
+                ]);
+                
+                pkcs11.C_FindObjectsFinal(session);
+                pkcs11.C_Logout(session);
+                pkcs11.C_CloseSession(session);
+                pkcs11.C_Finalize();
+                
+                return certValue[0].value;
+            } else {
+                throw new Error('No certificate found on token');
+            }
+        } catch (error) {
+            throw new Error(`Failed to read from PKCS#11 token: ${error.message}`);
+        }
+    }
+
+    readStaticCertificate() {
         const certPath = './certificate.pfx';
         if (fs.existsSync(certPath)) {
-            console.log('✅ Certificate read successfully from token simulation');
             return fs.readFileSync(certPath);
         }
-        
-        // Generate a mock certificate buffer if no static cert exists
-        const mockCert = Buffer.from(`MOCK_CERTIFICATE_${tokenInfo.id}_${Date.now()}`);
-        console.log('⚠️ Using mock certificate (no static certificate found)');
-        return mockCert;
+        throw new Error('No certificate available');
     }
 }
-
 // Initialize USB Token Manager
 const usbTokenManager = new USBTokenManager();
 
