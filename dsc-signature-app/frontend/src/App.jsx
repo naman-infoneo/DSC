@@ -245,14 +245,14 @@ function App() {
           >
             <option value="">-- Select Certificate Source --</option>
             {certificates.map(cert => (
-              <option key={cert.id} value={cert.id}>
+              <option key={cert.id} value={cert.id} style={{ color: 'black' }}>
                 {getCertificateIcon(cert.type)} {cert.name}
               </option>
             ))}
           </select>
           
           <button 
-            onClick={refreshCertificates} 
+            onClick={()=>refreshCertificates()} 
             disabled={loading || refreshing}
             className="refresh-btn"
             title="Refresh certificate list and scan for USB tokens"
