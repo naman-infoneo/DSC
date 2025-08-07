@@ -1,0 +1,8 @@
+
+=== PDF SIGNATURE LOG ===
+Timestamp: 2025-08-07T07:18:12.683Z
+Original File: bill_forwarding_letter_for_symposium_1754478831437.pdf
+PDF Hash (SHA256): e484b6632c0eda7ee498a739c76b0867ab53209f1e4d684613e1b6172f299840
+Signer Information: jatin (jatin@gmail.com)
+Signature ID: d93432b8-ba1f-4b0a-8d06-1f6f1e0482ae
+========================
