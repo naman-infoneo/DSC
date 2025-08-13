@@ -11,18 +11,18 @@ function App() {
   const [refreshing, setRefreshing] = useState(false);
 
   // Load certificates on mount and set up polling for USB changes
-  useEffect(() => {
-    loadCertificates();
+  // useEffect(() => {
+  //   loadCertificates();
     
-    // Poll for USB token changes every 5 seconds
-    const interval = setInterval(() => {
-      if (!loading && !refreshing) {
-        loadCertificates(true); // Silent refresh
-      }
-    }, 5000);
+  //   // Poll for USB token changes every 5 seconds
+  //   const interval = setInterval(() => {
+  //     if (!loading && !refreshing) {
+  //       loadCertificates(true); // Silent refresh
+  //     }
+  //   }, 5000);
 
-    return () => clearInterval(interval);
-  }, [loading, refreshing]);
+  //   return () => clearInterval(interval);
+  // }, [loading, refreshing]);
 
   const loadCertificates = async (silent = false) => {
     try {
