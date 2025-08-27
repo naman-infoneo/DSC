@@ -1,74 +1,169 @@
-// backend/app.js
 const express = require('express');
 const multer = require('multer');
-const signer = require('node-signpdf').default;
-const plainAddPlaceholder = require('node-signpdf/dist/helpers/plainAddPlaceholder').default;
 const fs = require('fs');
-const { PDFDocument, rgb } = require('pdf-lib');
+const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+const { pdflibAddPlaceholder } = require('@signpdf/placeholder-pdf-lib');
+const signer = require('node-signpdf').default;
 const cors = require('cors');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 app.use(cors());
 
+// async function addVisibleSignatureField(pdfBuffer) {
+//   const pdfDoc = await PDFDocument.load(pdfBuffer);
+//   const pages = pdfDoc.getPages();
+//   const firstPage = pages[0];
+  
+//   // Get page dimensions
+//   const { width, height } = firstPage.getSize();
+  
+//   // Define signature position (bottom-right corner)
+//   const sigX = 50;
+//   const sigY = 50;
+//   const sigWidth = 200;
+//   const sigHeight = 100;
+
+//   // Add visible text/drawing to make signature more visible
+//   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  
+//   // Draw signature box background
+//   firstPage.drawRectangle({
+//     x: sigX,
+//     y: sigY,
+//     width: sigWidth,
+//     height: sigHeight,
+//     borderColor: rgb(0, 0, 0),
+//     borderWidth: 1,
+//   });
+
+//   // Add signature text
+//   firstPage.drawText('Digitally Signed By:', {
+//     x: sigX + 5,
+//     y: sigY + sigHeight - 20,
+//     size: 10,
+//     font: font,
+//     color: rgb(0, 0, 0),
+//   });
+
+//   firstPage.drawText('Your Name', {
+//     x: sigX + 5,
+//     y: sigY + sigHeight - 35,
+//     size: 12,
+//     font: font,
+//     color: rgb(0, 0, 0),
+//   });
+
+//   firstPage.drawText('Date: ' + new Date().toLocaleDateString(), {
+//     x: sigX + 5,
+//     y: sigY + sigHeight - 50,
+//     size: 8,
+//     font: font,
+//     color: rgb(0, 0, 0),
+//   });
+
+//   // Add the signature placeholder
+//   pdflibAddPlaceholder({
+//     pdfDoc,
+//     reason: 'Document approval',
+//     location: 'India',
+//     name: 'Your Name',
+//     contactInfo: 'support@yourcompany.com',
+//     signatureLength: 4000,
+//     widgetRect: [sigX, sigY, sigX + sigWidth, sigY + sigHeight],
+//     signingTime: new Date(),
+//   });
+
+//   const pdfBytes = await pdfDoc.save({ 
+//     useObjectStreams: false,
+//     updateFieldAppearances: true 
+//   });
+//   return Buffer.from(pdfBytes);
+// }
+
 async function addVisibleSignatureField(pdfBuffer) {
   const pdfDoc = await PDFDocument.load(pdfBuffer);
-  const pages = pdfDoc.getPages();
-  const firstPage = pages[0];
+  const allPage = pdfDoc.getPages();
+  const firstPage = allPage[allPage.length - 1];
+  
+  // Create visible signature appearance first
+  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  
+  const sigX = 400;  // Right side of page
+  const sigY = 30;  // Bottom area
+  const sigWidth = 160;
+  const sigHeight = 70;
 
-  // Draw a rectangle for signature block
+  // Draw signature box
   firstPage.drawRectangle({
-    x: 50,
-    y: 50,
-    width: 200,
-    height: 70,
+    x: sigX,
+    y: sigY,
+    width: sigWidth,
+    height: sigHeight,
     borderColor: rgb(0, 0, 0),
-    borderWidth: 1,
-    color: rgb(0.9, 0.9, 0.9),
+    // borderWidth: 0,
+    // color: rgb(0.95, 0.95, 0.95), // Light gray background
   });
 
-  // Add text inside the block
-  firstPage.drawText('Digitally Signed by:\nYour Name', {
-    x: 55,
-    y: 95,
+  // Add "DIGITALLY SIGNED" text
+  firstPage.drawText('DIGITALLY SIGNED', {
+    x: sigX + 10,
+    y: sigY + 50,
+    size: 12,
+    font: font,
+    color: rgb(0, 0.5, 0), // Green color
+    opacity: 0.6,
+  });
+
+  firstPage.drawText('Your Name', {
+    x: sigX + 10,
+    y: sigY + 30,
     size: 10,
+    font: font,
     color: rgb(0, 0, 0),
+    opacity: 0.6,
   });
 
-  const pdfBytes = await pdfDoc.save({ useObjectStreams: false });
+  firstPage.drawText(new Date().toLocaleString(), {
+    x: sigX + 10,
+    y: sigY + 10,
+    size: 8,
+    font: font,
+    color: rgb(0.5, 0.5, 0.5),
+    opacity: 0.6,
+  });
 
-  // Add signature placeholder for node-signpdf
-  return plainAddPlaceholder({
-    pdfBuffer: Buffer.from(pdfBytes),
+  // Then add the cryptographic signature
+  pdflibAddPlaceholder({
+    pdfDoc,
     reason: 'Document approval',
     location: 'India',
     name: 'Your Name',
     contactInfo: 'support@yourcompany.com',
-    signatureLength: 1612,
+    signatureLength: 40000000,
+    widgetRect: [sigX, sigY, sigX + sigWidth, sigY + sigHeight],
+    signingTime: new Date(),
   });
+
+  return Buffer.from(await pdfDoc.save({ 
+    useObjectStreams: false,
+    updateFieldAppearances: true 
+  }));
 }
 
 
 app.post('/sign', upload.single('pdf'), async (req, res) => {
   try {
-    // Read uploaded PDF file
     const pdfBuffer = fs.readFileSync(req.file.path);
-
-    // Add a visible signature placeholder (green tick block)
     const pdfWithPlaceholder = await addVisibleSignatureField(pdfBuffer);
-
-    // Load your DSC certificate
-    const p12Buffer = fs.readFileSync('./certificate.pfx');
-
-    // Digitally sign the PDF
+    const p12Buffer = fs.readFileSync('./sharad.pfx');
+    
     const signedPdf = signer.sign(pdfWithPlaceholder, p12Buffer, {
-      passphrase: '123456',
+      passphrase: 'emudhra',
     });
 
-    // Clean up
     fs.unlinkSync(req.file.path);
 
-    // Return the signed PDF
     res.type('application/pdf');
     res.send(Buffer.from(signedPdf));
   } catch (err) {
