@@ -12,7 +12,13 @@ app.use(cors());
 app.post('/sign', upload.single('pdf'), async (req, res) => {
   try {
     const pdfBuffer = fs.readFileSync(req.file.path);
-    const placeholderPdf = plainAddPlaceholder({ pdfBuffer });
+    const placeholderPdf = plainAddPlaceholder(
+      {
+        pdfBuffer, reason: 'Document approval',
+        location: 'India',
+        name: 'Your Name',
+        contactInfo: 'support@yourcompany.com'
+      });
     const p12Buffer = fs.readFileSync('./certificate.pfx');
     const signedPdf = signer.sign(placeholderPdf, p12Buffer, { passphrase: '123456' });
     fs.unlinkSync(req.file.path);
