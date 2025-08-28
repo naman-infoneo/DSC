@@ -10,146 +10,86 @@ const app = express();
 const upload = multer({ dest: 'uploads/' });
 app.use(cors());
 
-// async function addVisibleSignatureField(pdfBuffer) {
-//   const pdfDoc = await PDFDocument.load(pdfBuffer);
-//   const pages = pdfDoc.getPages();
-//   const firstPage = pages[0];
-  
-//   // Get page dimensions
-//   const { width, height } = firstPage.getSize();
-  
-//   // Define signature position (bottom-right corner)
-//   const sigX = 50;
-//   const sigY = 50;
-//   const sigWidth = 200;
-//   const sigHeight = 100;
-
-//   // Add visible text/drawing to make signature more visible
-//   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  
-//   // Draw signature box background
-//   firstPage.drawRectangle({
-//     x: sigX,
-//     y: sigY,
-//     width: sigWidth,
-//     height: sigHeight,
-//     borderColor: rgb(0, 0, 0),
-//     borderWidth: 1,
-//   });
-
-//   // Add signature text
-//   firstPage.drawText('Digitally Signed By:', {
-//     x: sigX + 5,
-//     y: sigY + sigHeight - 20,
-//     size: 10,
-//     font: font,
-//     color: rgb(0, 0, 0),
-//   });
-
-//   firstPage.drawText('Your Name', {
-//     x: sigX + 5,
-//     y: sigY + sigHeight - 35,
-//     size: 12,
-//     font: font,
-//     color: rgb(0, 0, 0),
-//   });
-
-//   firstPage.drawText('Date: ' + new Date().toLocaleDateString(), {
-//     x: sigX + 5,
-//     y: sigY + sigHeight - 50,
-//     size: 8,
-//     font: font,
-//     color: rgb(0, 0, 0),
-//   });
-
-//   // Add the signature placeholder
-//   pdflibAddPlaceholder({
-//     pdfDoc,
-//     reason: 'Document approval',
-//     location: 'India',
-//     name: 'Your Name',
-//     contactInfo: 'support@yourcompany.com',
-//     signatureLength: 4000,
-//     widgetRect: [sigX, sigY, sigX + sigWidth, sigY + sigHeight],
-//     signingTime: new Date(),
-//   });
-
-//   const pdfBytes = await pdfDoc.save({ 
-//     useObjectStreams: false,
-//     updateFieldAppearances: true 
-//   });
-//   return Buffer.from(pdfBytes);
-// }
 
 async function addVisibleSignatureField(pdfBuffer) {
   const pdfDoc = await PDFDocument.load(pdfBuffer);
-  const allPage = pdfDoc.getPages();
-  const firstPage = allPage[allPage.length - 1];
-  
-  // Create visible signature appearance first
-  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  
-  const sigX = 400;  // Right side of page
-  const sigY = 30;  // Bottom area
-  const sigWidth = 160;
-  const sigHeight = 70;
+  const pages = pdfDoc.getPages();
+  const lastPage = pages[pages.length - 1];   // ✅ last page
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+  const sigX = 400;
+  const sigY = 20;
+  const sigWidth = 155;
+  const sigHeight = 50;
+
+  const PsigX = 398;
+  const PsigY = 20;
+  const PsigWidth = 159;
+  const PsigHeight = 46;
 
   // Draw signature box
-  firstPage.drawRectangle({
+  lastPage.drawRectangle({
     x: sigX,
-    y: sigY,
+    y: sigY + 2,
     width: sigWidth,
-    height: sigHeight,
-    borderColor: rgb(0, 0, 0),
-    // borderWidth: 0,
-    // color: rgb(0.95, 0.95, 0.95), // Light gray background
+    height: sigHeight - 8,
+    borderColor: rgb(0.4, 0.4, 0.4),
+    borderWidth: 0.5,
   });
 
-  // Add "DIGITALLY SIGNED" text
-  firstPage.drawText('DIGITALLY SIGNED', {
-    x: sigX + 10,
-    y: sigY + 50,
-    size: 12,
-    font: font,
-    color: rgb(0, 0.5, 0), // Green color
-    opacity: 0.6,
+  // ✅ embed checkmark
+  const checkmarkBase64 = fs.readFileSync("./check.png");
+  const checkImg = await pdfDoc.embedPng(checkmarkBase64);
+  const imgSize = 35;
+  lastPage.drawImage(checkImg, {
+    x: sigX,
+    y: sigY + (sigHeight / 2) - (imgSize / 2) - 2,
+    width: imgSize,
+    height: imgSize,
+
   });
 
-  firstPage.drawText('Your Name', {
-    x: sigX + 10,
-    y: sigY + 30,
-    size: 10,
-    font: font,
+  // ✅ add text
+  const textX = sigX + 40;
+  lastPage.drawText('Digitally signed on', {
+    x: textX,
+    y: sigY + sigHeight - 25,
+    size: 9,
+    font,
     color: rgb(0, 0, 0),
-    opacity: 0.6,
-  });
 
-  firstPage.drawText(new Date().toLocaleString(), {
-    x: sigX + 10,
-    y: sigY + 10,
+  });
+  lastPage.drawText(new Date().toLocaleString(), {
+    x: textX,
+    y: sigY + 14,
     size: 8,
-    font: font,
-    color: rgb(0.5, 0.5, 0.5),
-    opacity: 0.6,
+    font,
+    color: rgb(0.4, 0.4, 0.4), //gray
+
   });
 
-  // Then add the cryptographic signature
   pdflibAddPlaceholder({
     pdfDoc,
     reason: 'Document approval',
     location: 'India',
     name: 'Your Name',
     contactInfo: 'support@yourcompany.com',
-    signatureLength: 40000000,
-    widgetRect: [sigX, sigY, sigX + sigWidth, sigY + sigHeight],
-    signingTime: new Date(),
+    signatureLength: 40000,
+    widgetRect: [PsigX, PsigY, PsigX + PsigWidth, PsigY + PsigHeight],
+    // pdfPageRef: lastPage.ref,   // <-- key line
+    // pdfPageIndex: lastPage,  // <-- key line
+    pdfPage: lastPage,  // <-- key line
   });
 
-  return Buffer.from(await pdfDoc.save({ 
-    useObjectStreams: false,
-    updateFieldAppearances: true 
-  }));
+  return Buffer.from(
+    await pdfDoc.save({
+      useObjectStreams: false,
+      updateFieldAppearances: true,
+    })
+  );
 }
+
+
 
 
 app.post('/sign', upload.single('pdf'), async (req, res) => {
