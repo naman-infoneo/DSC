@@ -14,7 +14,8 @@ app.post('/sign', upload.single('pdf'), async (req, res) => {
     const pdfBuffer = fs.readFileSync(req.file.path);
     const placeholderPdf = plainAddPlaceholder(
       {
-        pdfBuffer, reason: 'Document approval',
+        pdfBuffer, 
+        reason: 'Document approval',
         location: 'India',
         name: 'Your Name',
         contactInfo: 'support@yourcompany.com'
